@@ -10119,8 +10119,30 @@ static int present_crop_rect(id<MTLTexture> src, const int crop[4], NSUInteger r
     }
     r[0] = crop[0]; r[1] = crop[1]; r[2] = crop[2]; r[3] = crop[3]; return 1;
 }
+// DM_PRESENT_ASPECT: how the picture is shaped before present_viewport fits it to the canvas. fit (default) = the game's own shape; fill = the picture's centre cropped to the canvas's
+// own ratio, so no bars (iPhone about 19.5:9 loses a strip at the top and bottom of the 16:9 picture); 16:10 = the centre cropped to 16:10, then fitted (bars at the sides on a phone,
+// fewer at the top and bottom on an iPad). Read once.
+static int present_aspect_mode(void) {
+    static int mode = -1;
+    if (mode >= 0) return mode;
+    const char *e = getenv("DM_PRESENT_ASPECT"); mode = 0;
+    if (e && !strcmp(e, "fill")) mode = 1;
+    else if (e && !strcmp(e, "16:10")) mode = 2;
+    else if (e && *e && strcmp(e, "fit") && strcmp(e, "16:9")) MLOG("[RED] DM_PRESENT_ASPECT=%s: fit, fill or 16:10; keeping fit", e);
+    MLOG("present aspect (DM_PRESENT_ASPECT): %s", mode == 1 ? "fill, cropped to the screen's ratio" : mode == 2 ? "16:10, cropped" : "fit, the game's own ratio");
+    return mode;
+}
+// Narrows the valid rectangle r (x, y, width, height) to the ratio the aspect mode wants, centred; unchanged for fit or a ratio within 0.5 %
+static void present_aspect_crop(NSUInteger r[4], double dw, double dh) {
+    int mode = present_aspect_mode(); if (!mode || !r[2] || !r[3] || dh <= 0) return;
+    double want = mode == 1 ? dw / dh : 16.0 / 10.0, have = (double)r[2] / r[3];
+    if (fabs(have / want - 1) < 0.005) return;
+    if (want > have) { NSUInteger h = (NSUInteger)llround(r[2] / want); if (h < 1) h = 1; r[1] += (r[3] - h) / 2; r[3] = h; }
+    else { NSUInteger w = (NSUInteger)llround(r[3] * want); if (w < 1) w = 1; r[0] += (r[2] - w) / 2; r[2] = w; }
+}
 static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4]) {
     NSUInteger r[4]; if (!present_crop_rect(src, crop, r)) return 0;
+    present_aspect_crop(r, dst.width, dst.height);
     NSUInteger cx = r[0], cy = r[1], cw = r[2], ch = r[3];
     static uint64_t last_crop[8]; uint64_t meta[8] = {src.width, src.height, cx, cy, cw, ch, dst.width, dst.height};
     if (memcmp(meta, last_crop, sizeof meta)) { memcpy(last_crop, meta, sizeof meta);
@@ -10219,6 +10241,7 @@ static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTe
 // (fx: the scaler state to use, nil = bilinear). uvb: the pass's crop constants (one buffer per present allocator, written by the CPU)
 static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], id<MTLBuffer> uvb, fx_state *fx) {
     NSUInteger r[4]; if (!present_crop_rect(src, crop, r)) return 0;
+    present_aspect_crop(r, dst.width, dst.height);
     present_pipeline(dst.pixelFormat);
     double dw = dst.width, dh = dst.height;
     MTLViewport vp = present_viewport(r[2], r[3], dw, dh);
