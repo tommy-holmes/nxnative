@@ -10103,7 +10103,9 @@ static id<MTLTexture> present_raw_src(id<MTLTexture> src) {
 // The rectangle of the canvas (dw x dh) the picture (cw x ch) is drawn into: the picture's aspect ratio kept and centred, black bars in the rest (no stretching when the screen's ratio
 // differs from the game's, e.g. iPhone about 19.5:9 against the game's 16:9); when the ratios differ by under 1 % (the remainder from a game width that is a multiple of 8 in the
 // full-screen setup, e.g. 1952x900 against 2868x1320 differs by 0.17 %) the whole canvas, leaving no border of a few pixels
+static int present_aspect_mode(void);
 static MTLViewport present_viewport(double cw, double ch, double dw, double dh) {
+    if (present_aspect_mode() == 3) return (MTLViewport){0, 0, dw, dh, 0, 1};   // stretch: the whole picture over the whole canvas, the ratio not kept
     double s = fmin(dw / cw, dh / ch);
     MTLViewport vp = {floor((dw - cw * s) / 2), floor((dh - ch * s) / 2), round(cw * s), round(ch * s), 0, 1};
     if (fabs((dw / dh) / (cw / ch) - 1) < 0.01) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
@@ -10128,13 +10130,14 @@ static int present_aspect_mode(void) {
     const char *e = getenv("DM_PRESENT_ASPECT"); mode = 0;
     if (e && !strcmp(e, "fill")) mode = 1;
     else if (e && !strcmp(e, "16:10")) mode = 2;
-    else if (e && *e && strcmp(e, "fit") && strcmp(e, "16:9")) MLOG("[RED] DM_PRESENT_ASPECT=%s: fit, fill or 16:10; keeping fit", e);
-    MLOG("present aspect (DM_PRESENT_ASPECT): %s", mode == 1 ? "fill, cropped to the screen's ratio" : mode == 2 ? "16:10, cropped" : "fit, the game's own ratio");
+    else if (e && !strcmp(e, "stretch")) mode = 3;
+    else if (e && *e && strcmp(e, "fit") && strcmp(e, "16:9")) MLOG("[RED] DM_PRESENT_ASPECT=%s: fit, fill, 16:10 or stretch; keeping fit", e);
+    MLOG("present aspect (DM_PRESENT_ASPECT): %s", mode == 1 ? "fill, cropped to the screen's ratio" : mode == 2 ? "16:10, cropped" : mode == 3 ? "stretch, the whole picture over the whole screen" : "fit, the game's own ratio");
     return mode;
 }
 // Narrows the valid rectangle r (x, y, width, height) to the ratio the aspect mode wants, centred; unchanged for fit or a ratio within 0.5 %
 static void present_aspect_crop(NSUInteger r[4], double dw, double dh) {
-    int mode = present_aspect_mode(); if (!mode || !r[2] || !r[3] || dh <= 0) return;
+    int mode = present_aspect_mode(); if (!mode || mode == 3 || !r[2] || !r[3] || dh <= 0) return;   // stretch crops nothing
     double want = mode == 1 ? dw / dh : 16.0 / 10.0, have = (double)r[2] / r[3];
     if (fabs(have / want - 1) < 0.005) return;
     if (want > have) { NSUInteger h = (NSUInteger)llround(r[2] / want); if (h < 1) h = 1; r[1] += (r[3] - h) / 2; r[3] = h; }

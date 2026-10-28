@@ -33,7 +33,7 @@ The size of the 3D picture, from 50 to 100 %. Below 100 % the size is fixed ther
 
 ### Screen shape
 
-How the picture is shaped before it is shown. **16:9 (original)** keeps the game's own ratio, with black bars where the screen is wider or taller. **Fill screen** crops the picture's centre to your screen's own ratio, so it fills the screen with no bars; on an iPhone (about 19.5:9) a strip off the top and bottom is lost. **16:10** crops the centre to 16:10 and then fits that, which leaves fewer bars on an iPad. Cropping never stretches the picture, and the touch controls stay where they are.
+How the picture is shaped before it is shown. **16:9 (original)** keeps the game's own ratio, with black bars where the screen is wider or taller. **Fill screen** crops the picture's centre to your screen's own ratio, so it fills the screen with no bars; on an iPhone (about 19.5:9) a strip off the top and bottom is lost. **Stretch to fit** shows the whole picture over the whole screen with nothing cropped, so on an iPhone it looks a little wider than the game intended. **16:10** crops the centre to 16:10 and then fits that, which leaves fewer bars on an iPad. Cropping never stretches the picture, and the touch controls stay where they are.
 
 ### Upscaling
 
@@ -217,7 +217,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Game rumble | `DM_RUMBLE` | `1`, `0` |
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
-| Screen shape | `DM_PRESENT_ASPECT` | `fit`, `fill`, `16:10` |
+| Screen shape | `DM_PRESENT_ASPECT` | `fit`, `fill`, `stretch`, `16:10` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |

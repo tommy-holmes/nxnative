@@ -164,7 +164,7 @@ DM_PAD_MERGE	switch	`=1` on the Mac merges every controller into player 1, as be
 DM_PATCH_FRONT	switch	`=<bytes>`: the size of the patch area right before the module base for a long text (`BIG_TEXT`); set only by the rewriter's own rerun with the size it needs
 DM_PREEMPT	switch	`0` / `1` overrides the profile's `core_preempt`: also check already-runnable higher-priority peers on the caller's core after every thread SVC
 DM_PRELOAD	diagnostic	Set: on the Mac, runs the host's early background loading (`dm_host_preload_start`) as the iOS app does, to exercise that path
-DM_PRESENT_ASPECT	player	`fit` (default, or `16:9`) keeps the game's own ratio with black bars; `fill` crops the picture's centre to the screen's ratio so it fills the screen; `16:10` crops it to 16:10 and fits that. Read once
+DM_PRESENT_ASPECT	player	`fit` (default, or `16:9`) keeps the game's own ratio with black bars; `fill` crops the picture's centre to the screen's ratio so it fills the screen; `stretch` fills the screen with the whole picture, stretched (the ratio is not kept, nothing is cropped); `16:10` crops it to 16:10 and fits that. Read once
 DM_PRESENT_FIFO	switch	`0` makes the display link take the newest queued frame each tick, as before; by default it shows frames in order, at most one tick behind
 DM_PRESENT_HZ	switch	`=<N>`: the frequency of presentation pacing (default 60); `0` means no frame limit and is for performance profiling only
 DM_PRESENT_INTERVAL	switch	`display` presents one frame per display-link tick whatever interval the game sets; `game` follows the game's present interval (default: the profile's `present_interval`)

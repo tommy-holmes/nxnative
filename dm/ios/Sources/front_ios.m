@@ -42,14 +42,14 @@ static UILabel *front_ios_fps_label(void);
 @end
 
 // The game view's box in a screen of the given size, by DM_PRESENT_ASPECT (nvn_mtl.m crops the picture to the box's ratio): fit (default) = 16:9 fitted and centred, with bars; fill = the whole
-// screen; 16:10 = a 16:10 box fitted and centred. fh / fv (optional): the fraction of the 16:9 picture's width / height the box shows, for the touch mapping (DmGamepad.m)
+// screen, the picture cropped to its shape; stretch = the whole screen, the whole picture stretched over it; 16:10 = a 16:10 box fitted and centred. fh / fv (optional): the fraction of the 16:9 picture's width / height the box shows, for the touch mapping (DmGamepad.m)
 CGRect dm_game_box(CGSize s, CGFloat *fh, CGFloat *fv) {
     const char *e = getenv("DM_PRESENT_ASPECT");
-    BOOL fill = e && !strcmp(e, "fill"), ten = e && !strcmp(e, "16:10");
+    BOOL fill = e && (!strcmp(e, "fill") || !strcmp(e, "stretch")), ten = e && !strcmp(e, "16:10"), stretch = e && !strcmp(e, "stretch");
     CGFloat w = s.width, h = s.height, pic = 16.0 / 9.0;
     if (!fill) { CGFloat r = ten ? 1.6 : pic; if (w / h > r) w = h * r; else h = w / r; }
     CGFloat vr = w / h, vh = 1, vv = 1;
-    if (fill || ten) { if (vr > pic) vv = pic / vr; else vh = vr / pic; }
+    if ((fill || ten) && !stretch) { if (vr > pic) vv = pic / vr; else vh = vr / pic; }   // stretch shows all of the picture
     if (fh) *fh = vh;
     if (fv) *fv = vv;
     return CGRectMake(floor((s.width - w) / 2), floor((s.height - h) / 2), w, h);
