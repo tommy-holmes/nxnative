@@ -43,6 +43,7 @@ static void publish(void) {
 // The accelerometer at 60 Hz (no gyroscope, no permission prompt): gravity is followed by a slow low-pass (about 0.8 s), and a sample whose acceleration beyond it exceeds DM_SHAKE_G
 // (1.5 G by default; Documents/env.txt overrides) is a hit. The controller is shaken until 120 ms after the last hit: a flick is one shake (the host finishes it as a whole cycle)
 // and shaking on keeps it going. Holding the phone and pressing the screen stays far below the threshold. Each detected shake is logged with its peak
+CGRect dm_game_box(CGSize s, CGFloat *fh, CGFloat *fv);   // front_ios.m
 static CMMotionManager *g_motion;
 static void motion_start(void) {
     if (g_motion) return;
@@ -297,16 +298,17 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     _stickShown = stick;
 }
 // Touches no control takes (all of them while a physical controller is connected) go to the game's touch screen, normalized on the 16:9 picture that front_ios.m
-// centres in the screen: Super Mario Galaxy's pointer in handheld mode (profile op_mode). The host reports them only in handheld mode, as on the Switch (hle_hid.c touch_read)
+// shows in the game view (cropped to the view's shape for Screen shape fill / 16:10): Super Mario Galaxy's pointer in handheld mode (profile op_mode). The host reports them only in handheld mode, as on the Switch (hle_hid.c touch_read)
 - (void)pushGame {
-    CGRect b = self.bounds; CGFloat w = b.size.width, h = b.size.height;
-    if (w <= 0 || h <= 0) return;
-    if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
-    CGFloat x0 = (b.size.width - w) / 2, y0 = (b.size.height - h) / 2;
+    CGRect b = self.bounds;
+    if (b.size.width <= 0 || b.size.height <= 0) return;
+    CGFloat fh, fv; CGRect box = dm_game_box(b.size, &fh, &fv);   // front_ios.m: the game view's box and the part of the 16:9 picture it shows (all of it unless the picture is cropped)
     dm_touch t[16]; int n = 0;
     for (int i = 0; i < 16; i++) if (_game[i]) {
         CGPoint p = [_game[i] locationInView:self];
-        t[n++] = (dm_touch){(uint32_t)i, (float)fmin(fmax((p.x - x0) / w, 0), 0.999), (float)fmin(fmax((p.y - y0) / h, 0), 0.999)};
+        CGFloat nx = fmin(fmax((p.x - box.origin.x) / box.size.width, 0), 1), ny = fmin(fmax((p.y - box.origin.y) / box.size.height, 0), 1);
+        nx = 0.5 + (nx - 0.5) * fh; ny = 0.5 + (ny - 0.5) * fv;
+        t[n++] = (dm_touch){(uint32_t)i, (float)fmin(nx, 0.999), (float)fmin(ny, 0.999)};
     }
     dm_touch_set(t, n);
 }

@@ -41,6 +41,20 @@ static UILabel *front_ios_fps_label(void);
 }
 @end
 
+// The game view's box in a screen of the given size, by DM_PRESENT_ASPECT (nvn_mtl.m crops the picture to the box's ratio): fit (default) = 16:9 fitted and centred, with bars; fill = the whole
+// screen; 16:10 = a 16:10 box fitted and centred. fh / fv (optional): the fraction of the 16:9 picture's width / height the box shows, for the touch mapping (DmGamepad.m)
+CGRect dm_game_box(CGSize s, CGFloat *fh, CGFloat *fv) {
+    const char *e = getenv("DM_PRESENT_ASPECT");
+    BOOL fill = e && !strcmp(e, "fill"), ten = e && !strcmp(e, "16:10");
+    CGFloat w = s.width, h = s.height, pic = 16.0 / 9.0;
+    if (!fill) { CGFloat r = ten ? 1.6 : pic; if (w / h > r) w = h * r; else h = w / r; }
+    CGFloat vr = w / h, vh = 1, vv = 1;
+    if (fill || ten) { if (vr > pic) vv = pic / vr; else vh = vr / pic; }
+    if (fh) *fh = vh;
+    if (fv) *fv = vv;
+    return CGRectMake(floor((s.width - w) / 2), floor((s.height - h) / 2), w, h);
+}
+
 @interface DmRootVC : UIViewController
 @property (nonatomic, strong) DmGameView *game;
 @property (nonatomic, strong) UIView *pad;
@@ -85,9 +99,8 @@ static void launcher_done(void) { [g_root startGame]; }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
-    CGFloat w = b.size.width, h = b.size.height;   // Fit 16:9 into the whole screen
-    if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
-    self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
+    CGRect box = dm_game_box(b.size, NULL, NULL);   // the picture's box: 16:9 fitted into the screen, or the whole screen / a 16:10 box for DM_PRESENT_ASPECT
+    self.game.frame = box;
     if (self.fps) {   // the top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
         CGRect s = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
         self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
