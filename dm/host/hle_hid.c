@@ -317,6 +317,25 @@ enum { SIX_PERIOD_NS = 5000000 };
 #define SHAKE_G 3.0
 #define SHAKE_REV 1.5
 static int shaking(uint64_t t) { return t >= atomic_load(&g_shake_t0) && t < atomic_load(&g_shake_end); }
+// The phone's own motion (DM_GYRO=1, DmGamepad.m through dm_motion_set): the newest acceleration (G) and angular velocity (revolutions / s) in the controller's axes, and the angle
+// they add up to (revolutions, from the start). Used for player 1's sensor unless a shake is under way; the same newest values answer every entry of a history read
+static pthread_mutex_t g_mot_mu = PTHREAD_MUTEX_INITIALIZER;
+static int g_mot_live; static float g_mot_acc[3], g_mot_gyro[3]; static double g_mot_ang[3];
+void dm_motion_set(const float acc[3], const float gyro[3], double dt) {
+    pthread_mutex_lock(&g_mot_mu);
+    for (int i = 0; i < 3; i++) { g_mot_acc[i] = acc[i]; g_mot_gyro[i] = gyro[i]; if (dt > 0 && dt < 0.5) g_mot_ang[i] += gyro[i] * dt; }
+    g_mot_live = 1;
+    pthread_mutex_unlock(&g_mot_mu);
+}
+// dir = the transpose of Rz * Ry * Rx for the three angles (the yaw-only case below is Rz(-yaw))
+static void six_dir_from_angles(float *dir, const double ang[3]) {
+    double x = 2 * M_PI * ang[0], y = 2 * M_PI * ang[1], z = 2 * M_PI * ang[2];
+    double cx = cos(x), sx = sin(x), cy = cos(y), sy = sin(y), cz = cos(z), sz = sin(z);
+    double r[9] = { cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx,
+                    sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx,
+                    -sy,     cy * sx,                cy * cx };
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) dir[i * 3 + j] = (float)r[j * 3 + i];
+}
 static void six_sample(SixAxisState *s, int64_t samp, int shakes) {
     memset(s, 0, sizeof *s);
     uint64_t t = (uint64_t)samp * SIX_PERIOD_NS;
@@ -328,6 +347,15 @@ static void six_sample(SixAxisState *s, int64_t samp, int shakes) {
         s->acc[0] = (float)(SHAKE_G * sin(ph));
         s->gyro[2] = (float)(SHAKE_REV * sin(ph));
         yaw = SHAKE_REV / (2 * M_PI * SHAKE_HZ) * (1 - cos(ph)); s->angle[2] = (float)yaw;
+    }
+    if (shakes && !(s->gyro[2] || s->acc[0])) {   // no shake under way: the phone's own motion, when the front end sends it
+        pthread_mutex_lock(&g_mot_mu);
+        if (g_mot_live) {
+            for (int i = 0; i < 3; i++) { s->acc[i] = g_mot_acc[i]; s->gyro[i] = g_mot_gyro[i]; s->angle[i] = (float)g_mot_ang[i]; }
+            six_dir_from_angles(s->dir, g_mot_ang);
+            pthread_mutex_unlock(&g_mot_mu); return;
+        }
+        pthread_mutex_unlock(&g_mot_mu);
     }
     float c = (float)cos(2 * M_PI * yaw), sn = (float)sin(2 * M_PI * yaw);
     s->dir[0] = c; s->dir[1] = sn; s->dir[3] = -sn; s->dir[4] = c; s->dir[8] = 1;

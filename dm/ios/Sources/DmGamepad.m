@@ -66,6 +66,27 @@ static void motion_start(void) {
         pthread_mutex_lock(&g_mu); BOOL changed = g_shake_btn != want; g_shake_btn = want; pthread_mutex_unlock(&g_mu);
         if (changed) publish();
     }];
+    // Gyro (DM_GYRO=1): the phone's own acceleration and rotation drive the games' six-axis sensor. CoreMotion's axes follow the device held upright; the controller's follow the screen in
+    // landscape, so x and y swap (and flip with the way the phone is turned). The signs are a first guess for the Switch's handheld axes: Documents/log.txt shows the first samples
+    const char *gyro_env = getenv("DM_GYRO");
+    if (gyro_env && atoi(gyro_env) == 1 && g_motion.deviceMotionAvailable) {
+        LOG("front end: gyro on, the phone's motion drives the six-axis sensor");
+        [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
+        g_motion.deviceMotionUpdateInterval = 1.0 / 120;
+        NSOperationQueue *q2 = [NSOperationQueue new]; q2.maxConcurrentOperationCount = 1;
+        __block double lastT = -1; __block int logged = 0;
+        [g_motion startDeviceMotionUpdatesToQueue:q2 withHandler:^(CMDeviceMotion *m, NSError *err) {
+            (void)err; if (!m) return;
+            double ax = m.gravity.x + m.userAcceleration.x, ay = m.gravity.y + m.userAcceleration.y, az = m.gravity.z + m.userAcceleration.z;
+            double rx = m.rotationRate.x / (2 * M_PI), ry = m.rotationRate.y / (2 * M_PI), rz = m.rotationRate.z / (2 * M_PI);
+            BOOL topRight = UIDevice.currentDevice.orientation == UIDeviceOrientationLandscapeRight;   // the phone's top points right: screen-right is +y of the device
+            float acc[3]  = { (float)(topRight ? ay : -ay), (float)(topRight ? -ax : ax), (float)az };
+            float gyro[3] = { (float)(topRight ? ry : -ry), (float)(topRight ? -rx : rx), (float)rz };
+            double dt = lastT < 0 ? 0 : m.timestamp - lastT; lastT = m.timestamp;
+            if (logged < 3 && lastT > 0) { logged++; LOG("front end: gyro sample acc %.2f %.2f %.2f G, rotation %.2f %.2f %.2f rev/s (top points %s)", acc[0], acc[1], acc[2], gyro[0], gyro[1], gyro[2], topRight ? "right" : "left"); }
+            dm_motion_set(acc, gyro, dt);
+        }];
+    }
 }
 
 // ---- Layout constants (in u; x measured from the outer edge, the right half mirrors) ----

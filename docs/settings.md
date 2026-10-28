@@ -4,7 +4,7 @@ The screen before the game starts shows the settings the game supports. A settin
 
 - [Tested defaults](#tested-defaults)
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Screen shape](#screen-shape), [Upscaling](#upscaling), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
-- [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
+- [Controls](#controls): [Touch feedback](#touch-feedback), [Gyro](#gyro-experimental), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
 - [Settings in a file](#settings-in-a-file)
@@ -67,6 +67,10 @@ Shows the frames per second at the top left.
 ### Touch feedback
 
 A light tap from the phone when you press an on-screen button.
+
+### Gyro (experimental)
+
+The phone's own motion drives the games that read the controller's motion (Breath of the Wild's aiming, for example). Off by default. The axis directions are a first guess for the Switch's handheld layout and have not been checked on a device; if the picture or aim moves the wrong way, turn it off and report it. Shaking the phone works either way.
 
 ### Game rumble
 
@@ -209,6 +213,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Display mode (Mac) | `DM_FULLSCREEN` | `1` fullscreen, `0` a window |
 | Frame-rate counter | `DM_SHOW_FPS` | `1`, `0` |
 | Touch feedback | `DM_TOUCH_HAPTICS` | `1`, `0` |
+| Gyro (experimental) | `DM_GYRO` | `1`, `0` |
 | Game rumble | `DM_RUMBLE` | `1`, `0` |
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
