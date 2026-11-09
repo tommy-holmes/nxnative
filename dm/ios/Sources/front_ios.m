@@ -84,6 +84,7 @@ static void tv_attach(void);
 @property (nonatomic, strong) UILabel *fps;
 @property (nonatomic) BOOL launched;
 @property (nonatomic, strong) id tv;   // the TV scene accessory's registration (iOS 27)
+@property (nonatomic) BOOL stretch;   // DM_PICTURE_FIT=stretch: the whole picture over the whole screen, nothing cropped, its shape not kept (DmLayout.h dm_layout_stretch)
 @property (nonatomic) BOOL fill;   // DM_PICTURE_FIT=fill: in landscape the picture covers the screen, its edges cropped (DmLayout.h dm_layout_picture)
 @property (nonatomic) BOOL partiallyOpen;   // an iPhone Duo's hinge half open (UIHingeInteraction, iOS 27.1)
 @property (nonatomic) NSInteger hingeStatus;
@@ -160,7 +161,8 @@ static void launcher_done(void) { [g_root startGame]; }
             setenv("DM_SCREEN_ASPECT", v, 1); LOG("front end: picture shape auto: window %.0fx%.0f points (%.3f:1) → DM_SCREEN_ASPECT=%s", sz.width, sz.height, r, v);
         }
     }
-    self.fill = dm_picture_fill(getenv("DM_PICTURE_FIT"));
+    self.fill = dm_picture_fill(getenv("DM_PICTURE_FIT")); self.stretch = dm_picture_stretch(getenv("DM_PICTURE_FIT"));
+    if (self.stretch) LOG("front end: picture Stretch (DM_PICTURE_FIT=stretch), the whole 16:9 picture is stretched over the screen in landscape");
     if (self.fill) LOG("front end: picture Fill (DM_PICTURE_FIT=fill), the 16:9 picture covers the screen in landscape and its edges are cropped");
     self.view.clipsToBounds = YES;   // with Fill the game view is larger than the screen
     self.view.window.traitOverrides.preferredContentSizeCategory = UIContentSizeCategorySmall;   // UIKit draws the in-game menu (GameMenu.swift) in this window: it keeps one compact text size over the game, whatever the system's text size
@@ -197,6 +199,7 @@ static void launcher_done(void) { [g_root startGame]; }
     UIEdgeInsets gameInsets = dm_game_safe_insets(b, self.view.safeAreaInsets, duoPortrait);
     BOOL onTV = self.game.superview != self.view;   // the TV's view lays the picture out; the phone is all pad
     DmLayout layout = onTV ? dm_layout_pad_only(b) : dm_layout_picture(dm_layout(b, gameInsets, self.partiallyOpen, division, g_picture_aspect), b, self.fill, g_picture_aspect);
+    if (!onTV && self.stretch) layout = dm_layout_stretch(layout, b);
     if (!onTV) self.game.frame = layout.game;
     layout.topSafeOnly = duoPortrait;
     NSString *line = [NSString stringWithFormat:@"%@, hinge %ld%s, divisions %@, picture %@, controls %@", onTV ? @"pad only (picture on the TV)" : layout.separated ? @"split" : self.fill ? @"overlay, Fill" : @"overlay",
@@ -275,7 +278,7 @@ void front_picture_shape(int w, int h) {   // front.h: the views take the presen
 bool dm_setting_live(const char *env, const char *value) {
     if (!env || !g_root.game) return false;
     if (!strcmp(env, "DM_PICTURE_FIT")) {
-        if (value) { g_root.fill = dm_picture_fill(value); [g_root.view setNeedsLayout]; LOG("front end: picture %s (in-game menu)", g_root.fill ? "Fill" : "Fit"); }
+        if (value) { g_root.fill = dm_picture_fill(value); g_root.stretch = dm_picture_stretch(value); [g_root.view setNeedsLayout]; LOG("front end: picture %s (in-game menu)", g_root.fill ? "Fill" : g_root.stretch ? "Stretch" : "Fit"); }
         return true;
     }
     if (!strcmp(env, "DM_OPMODE")) {
