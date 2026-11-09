@@ -4,6 +4,11 @@ Fingerprints cover an entire unwind function, its internal branches, constants a
 registers, and the bodies (or imported names) of its direct callees. Only relocation
 addresses are normalized. This is code identity evidence, not proof that an updated
 game still needs a workaround; enrolling a patch requires checking that assumption.
+A rule covers one function ({name, size, fingerprints, cuts}) or several that must change
+together ({name, functions: [{size, fingerprints, cuts}, ...]}): a multi-function rule
+applies only when every one of its functions matches, never in part.
+A frame-step rule ({name, size, fingerprints, stub}; patch_nso.py MATCH_FRAME_STEP) locates
+one function the same way and hands its start to the stub, which writes its sites there.
 No fuzzy matching, raw byte scanning or guessed function boundaries.
 """
 import hashlib
@@ -15,6 +20,9 @@ from nso_code import fde_ranges
 
 class MatchError(ValueError):
     pass
+
+
+TRAP_WORD, BRK = 0xe7ffdefe, 0xd4200000  # the word some compilers leave after a call that does not return, which Capstone cannot decode; brk #0
 
 
 def _signed(n, bits):
@@ -56,9 +64,11 @@ class Image:
         if start in self.bodies: return self.bodies[start]
         end = self.functions[start]
         code = self.image[start:end]
-        ins = list(self.md.disasm(code, start))
+        words = list(struct.unpack('<' + 'I' * (len(code) // 4), code))
+        # Decoded as brk so that the rest of the function can be read; the digest below still covers the word itself
+        decode = struct.pack('<' + 'I' * len(words), *(BRK if w == TRAP_WORD else w for w in words))
+        ins = list(self.md.disasm(decode, start))
         if len(ins) * 4 != len(code): raise MatchError(f'undecodable function at {start:#x}')
-        words = list(struct.unpack('<' + 'I' * len(ins), code))
         normalized, branches = words.copy(), []
         for i, (w, op) in enumerate(zip(words, ins)):
             branch = _relative(w)
@@ -124,6 +134,8 @@ class Image:
                 if (c >> 10) & 0xfff == lo:
                     name = self._import_slots().get(page + lo)
                     if name: return ('import', name)
+            # The SDK's system call wrappers are assembly without unwind entries; `svc #n; ret` is identified by its call number
+            if a & 0xffe0001f == 0xd4000001 and b == 0xd65f03c0 and target not in self.functions: return ('svc', (a >> 5) & 0xffff)
         if target not in self.functions: raise MatchError(f'callee has no verified boundary or import at {target:#x}')
         return ('function', self.functions[target] - target, self._body(target)[0])
 
@@ -134,7 +146,7 @@ class Image:
             self.fingerprints[start] = hashlib.sha256(json.dumps([body, refs], separators=(',', ':')).encode()).hexdigest()
         return self.fingerprints[start]
 
-    def recipe(self, offset, old, new, name):
+    def recipe(self, offset, old, new, name) -> dict:
         """Prepare a rule from a reviewed cut; the caller must validate another build."""
         starts = [s for s, e in self.functions.items() if s <= offset and offset + len(bytes.fromhex(old)) <= e]
         if len(starts) != 1: raise MatchError('cut must belong to exactly one complete unwind function')
@@ -146,16 +158,34 @@ class Image:
         self.match(rule)  # an authoring tool must reject an ambiguous reference too
         return rule
 
-    def match(self, rule):
+    def patch_recipe(self, cuts, name) -> dict:
+        """One rule from several reviewed cuts that must apply together (a constant spread over several functions); the caller must validate another build"""
+        functions = {}
+        for offset, old, new, reason in cuts:
+            starts = [s for s, e in self.functions.items() if s <= offset and offset + len(bytes.fromhex(old)) <= e]
+            if len(starts) != 1: raise MatchError(f'cut at {offset:#x} must belong to exactly one complete unwind function')
+            if self.image[offset:offset + len(bytes.fromhex(old))] != bytes.fromhex(old): raise MatchError(f'original bytes do not match at {offset:#x}')
+            functions.setdefault(starts[0], []).append((offset - starts[0], old, new, reason))
+        fns = [dict(size=self.functions[s] - s, fingerprints=[self.fingerprint(s)], cuts=c) for s, c in sorted(functions.items())]
+        rule = dict(name=name, **fns[0]) if len(fns) == 1 else dict(name=name, functions=fns)
         validate(rule)
+        self.match_patch(rule)
+        return rule
+
+    def locate(self, size, fingerprints):
+        """The start of the one function of this size with one of these fingerprints; MatchError unless exactly one matches"""
         matches = []
         for start, end in self.functions.items():
-            if end - start != rule['size']: continue
+            if end - start != size: continue
             try: digest = self.fingerprint(start)
             except MatchError: continue
-            if digest in rule['fingerprints']: matches.append(start)
+            if digest in fingerprints: matches.append(start)
         if len(matches) != 1: raise MatchError(f'{len(matches)} matching functions (need exactly one)')
-        start, = matches
+        return matches[0]
+
+    def match(self, rule):
+        validate(rule)
+        start = self.locate(rule['size'], rule['fingerprints'])
         cuts = []
         for delta, old, new, reason in rule['cuts']:
             off = start + delta
@@ -163,14 +193,85 @@ class Image:
             cuts.append((off, old, new, reason + ' [function match]'))
         return cuts
 
+    def match_patch(self, rule):
+        """The cuts of a rule of one or several functions: every function must match exactly once, at distinct places, or there are none.
+        A miss names every function that did not match (the ones a port to the build must review)"""
+        validate(rule)
+        if 'functions' not in rule: return self.match(rule)
+        cuts, starts, misses, n = [], set(), [], len(rule['functions'])
+        for i, fn in enumerate(rule['functions'], 1):
+            try: got = self.match(dict(fn, name=rule['name']))
+            except MatchError as e:
+                misses.append(f'function {i} of {n} ({fn["size"]} bytes): {e}'); continue
+            start = got[0][0] - fn['cuts'][0][0]
+            if start in starts: misses.append(f'function {i} of {n} matched a function another one did')
+            starts.add(start); cuts += got
+        if misses: raise MatchError('; '.join(misses) + (f'; the other {n - len(misses)} matched' if len(misses) < n else ''))
+        return cuts
 
-def validate(rule):
-    """Reject malformed rules and replacements whose meaning depends on an address."""
-    if set(rule) != {'name', 'size', 'fingerprints', 'cuts'}: raise ValueError('function patch needs name, size, fingerprints and cuts')
+
+def validate_function(rule):
+    """The function part of a rule: a name, its size and its fingerprints"""
     if not rule['name'] or not isinstance(rule['size'], int) or rule['size'] <= 0 or rule['size'] % 4: raise ValueError('invalid function size/name')
     if not isinstance(rule['fingerprints'], (list, tuple)) or not rule['fingerprints']: raise ValueError('missing function fingerprints')
     for digest in rule['fingerprints']:
         if len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest): raise ValueError('invalid function fingerprint')
+
+
+def validate_stub(rule):
+    """A frame-step rule (patch_nso.py MATCH_FRAME_STEP): {name, size, fingerprints, stub[, others]}, stub(ctx) writing its sites at ctx.base + offsets inside the function;
+    others = {label: {size, fingerprints}} names more functions the stub patches or depends on (fields it reads), each found the same way (ctx.others[label], None when not
+    exactly one matches)"""
+    if not {'name', 'size', 'fingerprints', 'stub'} <= set(rule) <= {'name', 'size', 'fingerprints', 'stub', 'others'}:
+        raise ValueError('a frame-step rule needs name, size, fingerprints and stub (and may name others)')
+    validate_function(rule)
+    if not callable(rule['stub']): raise ValueError('a frame-step rule\'s stub must be a function of the context')
+    if not isinstance(rule.get('others', {}), dict): raise ValueError('a frame-step rule\'s others are {label: {size, fingerprints}}')
+    for label, fn in rule.get('others', {}).items():
+        if not isinstance(fn, dict) or set(fn) != {'size', 'fingerprints'}: raise ValueError(f'another function of a frame-step rule ({label}) needs size and fingerprints')
+        validate_function(dict(fn, name=label))
+
+
+def locate_stub(image, text_end, rules, report=print):
+    """(rule, function start, others) of the one frame-step rule that matches, or None with a red line. Rules are one patch's reviewed implementations (one name): exactly one must
+    match. others maps each of the rule's other functions to its start, or to None with a red line when not exactly one matches: the stub leaves that part out, the rest still goes in"""
+    if not rules: return None
+    for rule in rules: validate_stub(rule)
+    names = {rule['name'] for rule in rules}
+    if len(names) != 1: raise ValueError(f'a module has one frame step: rules named {sorted(names)}')
+    name, = names
+    try: module = Image(image, text_end)
+    except MatchError as e:
+        report(f'[RED] frame step {name!r} skipped: {e}'); return None
+    found, misses = [], []
+    for i, rule in enumerate(rules, 1):
+        try: found.append((i, rule, module.locate(rule['size'], rule['fingerprints'])))
+        except MatchError as e: misses.append(str(e))
+    if len(found) != 1:
+        report(f'[RED] frame step {name!r} skipped: ' + (f'{len(found)} implementations match (need exactly one)' if found else '; '.join(misses)))
+        return None
+    (i, rule, start), = found
+    report(f'frame step {name!r}: matched the function at {start:#x}' + (f' (implementation {i} of {len(rules)})' if len(rules) > 1 else ''))
+    others = {}
+    for label, fn in rule.get('others', {}).items():
+        try:
+            others[label] = module.locate(fn['size'], fn['fingerprints']); report(f'frame step {name!r}: {label} at {others[label]:#x}')
+        except MatchError as e:
+            others[label] = None; report(f'[RED] frame step {name!r}: {label} left out: {e}')
+    return rule, start, others
+
+
+def validate(rule):
+    """Reject malformed rules and replacements whose meaning depends on an address."""
+    if 'functions' in rule:
+        if set(rule) != {'name', 'functions'}: raise ValueError('a patch of several functions needs only name and functions')
+        if not isinstance(rule['functions'], (list, tuple)) or len(rule['functions']) < 2: raise ValueError('a patch of several functions needs at least two')
+        for fn in rule['functions']:
+            if 'name' in fn or 'functions' in fn: raise ValueError('a function of a patch has size, fingerprints and cuts only')
+            validate(dict(fn, name=rule['name']))
+        return
+    if set(rule) != {'name', 'size', 'fingerprints', 'cuts'}: raise ValueError('function patch needs name, size, fingerprints and cuts')
+    validate_function(rule)
     if not rule['cuts']: raise ValueError('function patch has no cuts')
     used = set()
     for delta, old, new, reason in rule['cuts']:
@@ -180,30 +281,40 @@ def validate(rule):
         span = set(range(delta, delta + len(ob)))
         if used & span: raise ValueError('overlapping cuts')
         used |= span
-        if any(_pc_relative(w) for w, in struct.iter_unpack('<I', nb)): raise ValueError('replacement must not contain PC-relative instructions')
+        for i, (w,) in enumerate(struct.iter_unpack('<I', nb)):
+            # The fingerprint keeps a function's internal branches exact, so a branch that stays inside it means the same on every build that matches. Anything else depends on an address
+            branch = _relative(w)
+            if _pc_relative(w) and not (branch and 0 <= delta + i * 4 + branch[1] < rule['size']):
+                raise ValueError('replacement must not contain PC-relative instructions, except branches inside the matched function')
 
 
-def resolve(image, text_end, rules, report=print):
-    """Return verified cuts without mutating the image; refuse missing/ambiguous rules."""
+def resolve(image, text_end, rules, report=print, outcomes=None, red=True):
+    """Return verified cuts without mutating the image; refuse missing/ambiguous rules. outcomes, a list, gets (patch name, cut offsets or None, why) for each patch.
+    red=False logs a patch that does not apply as a plain line (SDK-wide patches, which a module may not need)"""
     if not rules: return []
+    groups = {}
+    # Rules with the same name are one patch's reviewed implementations (code another build changed, with its own size or cut offsets): exactly one of them must match
+    for rule in rules: groups.setdefault(rule['name'], []).append(rule)
+    def missed(name, why):
+        report(f'{"[RED] " if red else ""}function patch {name!r} skipped: {why}')
+        if outcomes is not None: outcomes.append((name, None, why))
     try: module = Image(image, text_end)
     except MatchError as e:
-        report(f'[RED] function patches skipped: {e}')
+        for name in groups: missed(name, str(e))
         return []
-    cuts, groups = [], {}
-    # Rules with the same name are one patch's reviewed implementations (a function another build changed, with its own size or cut offsets): exactly one of them must match
-    for rule in rules: groups.setdefault(rule['name'], []).append(rule)
+    cuts = []
     for name, alternatives in groups.items():
         found, misses = [], []
         for i, rule in enumerate(alternatives, 1):
-            try: found.append((i, module.match(rule)))
+            try: found.append((i, module.match_patch(rule)))
             except MatchError as e: misses.append(str(e))
         if len(found) != 1:
-            report(f'[RED] function patch {name!r} skipped: ' + (f'{len(found)} implementations match (need exactly one)' if found else '; '.join(misses)))
+            missed(name, f'{len(found)} implementations match (need exactly one)' if found else '; '.join(misses))
             continue
         (i, got), = found
         cuts.extend(got)
-        report(f'function patch {name!r}: matched at {got[0][0]:#x}' + (f' (implementation {i} of {len(alternatives)})' if len(alternatives) > 1 else ''))
+        report(f'function patch {name!r}: matched at {", ".join(f"{c[0]:#x}" for c in got)}' + (f' (implementation {i} of {len(alternatives)})' if len(alternatives) > 1 else ''))
+        if outcomes is not None: outcomes.append((name, [c[0] for c in got], f'implementation {i} of {len(alternatives)}'))
     occupied = set()
     for off, old, _, _ in cuts:
         span = set(range(off, off + len(bytes.fromhex(old))))
@@ -212,11 +323,34 @@ def resolve(image, text_end, rules, report=print):
     return cuts
 
 
+def registered_cuts(build_id):
+    """The CUTS the patch files register for a build ID (dm/tools/sdk_patches.py, dm/games/*/patches.py), or None"""
+    import glob, os, runpy
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in [os.path.join(here, 'sdk_patches.py')] + sorted(glob.glob(os.path.join(glob.escape(here), '../games/*/patches.py'))):   # escaped: brackets in a parent folder are a glob pattern
+        cuts = runpy.run_path(path).get('CUTS', {})
+        if build_id in cuts: return cuts[build_id]
+    return None
+
+
 if __name__ == '__main__':
-    import argparse
+    import argparse, os
     from nso_syms import load
-    ap = argparse.ArgumentParser(description='Prepare an opt-in function patch from a reviewed NSO cut; verify its match on another build before registering it.')
-    ap.add_argument('nso'); ap.add_argument('offset', type=lambda s: int(s, 0)); ap.add_argument('old'); ap.add_argument('new'); ap.add_argument('name')
+    ap = argparse.ArgumentParser(description='Prepare an opt-in function patch from a reviewed NSO cut, or from all of a registered build\'s cuts as one patch (--registered); '
+                                 'verify its match on another build before registering it.')
+    ap.add_argument('nso'); ap.add_argument('cut', nargs='*', metavar='offset old new name', help='one reviewed cut')
+    ap.add_argument('--registered', metavar='NAME', help='every cut the patch files register for this NSO\'s build ID, as one patch NAME that applies whole or not at all')
     args = ap.parse_args()
-    with open(args.nso, 'rb') as f: header = f.read(0x30)
-    print(json.dumps(Image(load(args.nso), struct.unpack_from('<I', header, 0x18)[0]).recipe(args.offset, args.old, args.new, args.name), indent=2))
+    with open(args.nso, 'rb') as f: header = f.read(0x50)
+    module = Image(load(args.nso), struct.unpack_from('<I', header, 0x18)[0])
+    if args.registered:
+        if args.cut: ap.error('--registered takes no cut')
+        bid = header[0x40:0x50].hex()
+        cuts = registered_cuts(bid)
+        if not cuts: ap.error(f'no CUTS registered for build {bid}')
+        where = f'{os.path.basename(args.nso)} {bid[:8]}'
+        rule = module.patch_recipe([(off, old, new, f'{why} (as {where} +{off:#x})') for off, old, new, why in cuts], args.registered)
+    else:
+        if len(args.cut) != 4: ap.error('give offset, old, new and name, or --registered NAME')
+        rule = module.recipe(int(args.cut[0], 0), args.cut[1], args.cut[2], args.cut[3])
+    print(json.dumps(rule, indent=2))
