@@ -97,6 +97,7 @@ DM_MEASURE_LOCK	path	`=<file>`: `scripts/regress.py`'s default `--lock`, the mea
 DM_MEMSTAT	diagnostic	`=<tsv>` writes one line per second of memory accounting: footprint, Metal allocation and resident and charged memory by region class (guest, code, malloc, gpu, …)
 DM_MEMSTAT_DUMP	diagnostic	`=<seconds>`: with `DM_MEMSTAT`, at that second writes every VM region of 1 MiB or more to `<tsv>.regions`
 DM_MEM_CAP_GB	switch	`=<GB>`: the memory watchdog exits when resident memory exceeds that many GB (default 24 on the Mac, none on iOS; `0` turns it off)
+DM_MENU_AUTOHIDE	player	`0` keeps the in-game menu's gear (top centre of the touch controls) always shown on the iPhone; on by default it fades out, and a double-tap where it was shows it for a few seconds (`DmGamepad.m`); launcher and in-game menu setting
 DM_METAL_CAPTURE	diagnostic	`=1` makes `build_ipa.sh` produce a build that can write GPU frame captures (`MetalCaptureEnabled` in `Info.plist`), for `DM_GPU_CAPTURE`
 DM_METAL_HUD	player	`1` shows Apple's Metal performance HUD over the game (frame rate, frame and GPU time, memory)
 DM_MOTION	switch	`0` ignores live motion: every six-axis sensor lies flat as before (a shake still plays), and neither controllers' motion sensors nor the phone's device motion are switched on (`hle_hid.c`, `motion_apple.h`, `DmGamepad.m`); the NSP script's `--no-motion` (`MOTION = False`) builds it in
@@ -239,7 +240,7 @@ DM_PAD_IDENTICAL	switch	`0` stops reading identical pads here when GameControlle
 DM_PAD_MERGE	switch	`=1` merges every controller into player 1, as before, instead of giving each controller a player of its own (Mac and iOS)
 DM_PAD_PRESS_TO_JOIN	player	`1`: a controller is no player until one of its buttons is pressed, then it is the lowest player free, whatever its port, link or model, identical pads included (`front_mac.m`, `DmGamepad.m`, `pad_slots.h`); not with `DM_PAD_MERGE`. Launcher setting
 DM_PATCH_FRONT	switch	`=<bytes>`: the size of the patch area right before the module base for a long text (`BIG_TEXT`); set only by the rewriter's own rerun with the size it needs
-DM_PHONE_MOTION	switch	On iOS, whether the phone's own device motion drives player 1's six-axis sensor: `auto` (default) while no controller supplies fresh motion, `1` phone only, `0` never; each source keeps its own orientation
+DM_PHONE_MOTION	player	On iOS (launcher setting), whether the phone's own device motion drives player 1's six-axis sensor: `auto` (default) while no controller supplies fresh motion, `1` phone only, `0` never; each source keeps its own orientation
 DM_PICTURE_FIT	player	`fill` scales the 16:9 picture on the iPhone and iPad until it covers the screen in landscape and crops the edges (a portrait or tabletop split and a TV stay fitted); `stretch` draws the whole picture over the whole screen, stretched with nothing cropped (the same layout as `fill`, and `present_viewport` fills the canvas); `fit` or unset, the largest 16:9 rectangle with black bars. Launcher and in-game menu setting
 DM_PREEMPT	switch	`0` / `1` overrides the profile's `core_preempt`: also check already-runnable higher-priority peers on the caller's core after every thread SVC
 DM_PRELOAD	diagnostic	Set: on the Mac, runs the host's early background loading (`dm_host_preload_start`) as the iOS app does, to exercise that path

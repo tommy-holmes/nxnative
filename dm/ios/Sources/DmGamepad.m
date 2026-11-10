@@ -117,6 +117,7 @@ static const CGFloat
     K_FACE_X = 81, K_PAD_Y = 82,                    // diamond centre from the outer edge; diamond and stick centre from the bottom (B's lower edge about 5 above it)
     K_FACE_GAP = 50, K_FACE_R = 27,                 // diamond: key distance from the centre, key radius
     K_PILL_DX = 52, K_PILL_Y = 22, K_PILL_W = 50, K_PILL_H = 28,   // − / +: centre from the screen's midline (the middle goes to the layout button) and from the top, size
+    K_MENU_SHOW = 3,                                // seconds the revealed menu button stays before it fades out again
     K_MENU_R = 15,                                  // menu button: top centre, level with − / +; it takes a touch within 1.6 times this (at least 22 points, half of a 44-point target)
     K_STICK_X = 81, K_STICK_R = 77, K_KNOB_R = 30,  // left stick: mirrors the diamond, the ring as large as the whole diamond (key distance + key radius), the knob a little larger than a diamond key
     K_STICK_GRAB = 1.4,                             // how near the ring centre a touch-down grabs a stick (times the ring radius)
@@ -156,6 +157,8 @@ static void pads_start(void);   // Physical controllers, below
     CAShapeLayer *_key[B_N]; CATextLayer *_label[B_N];   // one layer per key
     CAShapeLayer *_ring, *_knob;                   // the left stick (the right one is not drawn)
     DmMenuButton *_menu;                           // opens the in-game menu (GameMenu.swift)
+    BOOL _menuAuto, _menuShown;                    // the gear fades out (DM_MENU_AUTOHIDE, on by default); a double-tap where it was shows it for K_MENU_SHOW seconds
+    NSUInteger _menuGen;                           // each reveal's number: only the newest one's timer hides the gear
     UIImpactFeedbackGenerator *_touchFeedback;       // one short feedback per touch-control press edge
     unsigned _hapticSticks;
     BOOL _stickShown;                              // the left stick was held at the last refresh
@@ -217,6 +220,9 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
         __weak DmGamepad *weakSelf = self;
         [_menu addAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; [weakSelf reset]; }] forControlEvents:UIControlEventMenuActionTriggered];   // the menu opens: release every key and touch first
         [self addSubview:_menu];
+        const char *autohide = getenv("DM_MENU_AUTOHIDE"); _menuAuto = !autohide || atoi(autohide);
+        _menu.alpha = _menuAuto ? 0 : 1;
+        [_menu addAction:[UIAction actionWithHandler:^(UIAction *a) { (void)a; [weakSelf revealMenu]; }] forControlEvents:UIControlEventTouchDown];   // a touch on the shown gear keeps it a little longer
         NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
         int l = saved ? (int)saved.integerValue : DM_GAME_PAD_LAYOUT;
         if (l == 2 && dm_opmode() != 0) l = 0;   // Tap only in handheld mode (env.txt's DM_OPMODE may have changed it)
@@ -249,6 +255,20 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
 - (void)opmodeChanged {   // docked: the Tap layout goes (the game reads no touch screen then), unsaved, so handheld mode at the next start brings it back
     if (!_tap || dm_opmode() == 0) return;
     [self reset]; _tap = NO; _full = NO; [self applyLayout]; [self setNeedsLayout];
+}
+- (void)revealMenu {   // fade the gear in and arm the timer that fades it out again (a newer reveal cancels the older timer)
+    if (!_menuAuto) return;
+    NSUInteger gen = ++_menuGen; _menuShown = YES;
+    [UIView animateWithDuration:0.2 animations:^{ self->_menu.alpha = 1; }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(K_MENU_SHOW * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (gen != self->_menuGen || !self->_menuAuto) return;
+        self->_menuShown = NO;
+        [UIView animateWithDuration:0.4 animations:^{ self->_menu.alpha = 0; }];
+    });
+}
+- (void)setMenuAutohide:(BOOL)on {
+    _menuAuto = on; _menuGen++; _menuShown = NO;
+    [UIView animateWithDuration:0.2 animations:^{ self->_menu.alpha = on ? 0 : 1; }];
 }
 - (void)setTouchFeedback:(BOOL)on {
     if (!on) { _touchFeedback = nil; return; }
@@ -340,7 +360,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 }
 - (CGFloat)menuDistance:(CGPoint)p { return dist(p, self.menuCenter) / MAX(K_MENU_R * self.u * 1.6, 22); }
 - (BOOL)menuTakes:(CGPoint)p {   // the menu button takes a touch in its hit circle unless a locked key's target is nearer (the drawn keys are hidden in Tap and with a controller)
-    CGFloat d = [self menuDistance:p]; if (d > 1) return NO;
+    CGFloat d = [self menuDistance:p]; if (d > 1 || (_menuAuto && !_menuShown)) return NO;
     if (_tap || _padOff || (_layout.separated && !CGRectContainsPoint(_layout.controls, p))) return YES;
     int hit = [self btnAt:p];
     return hit < 0 || d < [self buttonDistance:hit point:p];
@@ -432,6 +452,7 @@ int front_web_touch(void);
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
     BOOL game = NO;
     for (UITouch *t in ts) {
+        if (_menuAuto && !_menuShown && t.tapCount >= 2 && [self menuDistance:[t locationInView:self]] <= 1) [self revealMenu];   // the second tap still goes on to the game or the control below
         if (_padOff) { game |= [self gameBegin:t]; continue; }
         CGPoint p = [t locationInView:self];
         if (_layout.separated && !CGRectContainsPoint(_layout.controls, p)) { game |= [self gameBegin:t]; continue; }
@@ -746,6 +767,7 @@ UIView *dm_gamepad_view(CGRect frame) { DmGamepad *v = [[DmGamepad alloc] initWi
 void dm_gamepad_arrange(UIView *view, DmLayout layout) { [(DmGamepad *)view arrange:layout]; }
 void dm_gamepad_opmode_changed(void) { [g_view opmodeChanged]; }
 void dm_gamepad_touch_feedback(bool on) { [g_view setTouchFeedback:on]; }
+void dm_gamepad_menu_autohide(bool on) { [g_view setMenuAutohide:on]; }
 int dm_pad_layout(void) { return g_view ? [g_view padLayout] : 0; }
 bool dm_pad_layout_offered(int layout) { return layout == 0 || layout == 1 || (layout == 2 && dm_opmode() == 0); }
 void dm_pad_layout_set(int layout) { [g_view setPadLayout:layout]; }
